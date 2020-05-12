@@ -1,0 +1,162 @@
+/**
+ *  Copyright 2015 SmartThings
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ *  Credit to "Telguard Garage Door Switch", namespace: "mjarends", author: "Mitch Arends" and "Smartthings' Z-Wave Fan Controller" 
+ *  code which I merged to come up with this. I am not a coder, so this can be improved but so far it does the job very well with the new app and the
+ *  Garage icons look the way they should. My garage display the Garage Icon but my Gate displays contact swith icon which is nice.
+ */
+ 
+metadata {
+	definition (name: "My Garage Opener", namespace: "undertakerjimmy", author: "J. Aviles", ocfDeviceType: "oic.d.garagedoor") {
+		capability "Actuator"
+		capability "Switch"
+		capability "Polling"
+		capability "Refresh"
+		capability "Sensor"
+        capability "Contact Sensor"
+        capability "Door Control"
+		capability "Garage Door Control"
+
+        attribute "contactState", "string"
+
+		fingerprint deviceId: "0x1000", inClusters: "0x72,0x86,0x25", manufacturer: "Telguard", model: "GDC1"
+	}
+
+	// simulator metadata
+	simulator {
+		status "on":  "command: 2003, payload: FF"
+		status "off": "command: 2003, payload: 00"
+
+		// reply messages
+		reply "2001FF,delay 100,2502": "command: 2503, payload: FF"
+		reply "200100,delay 100,2502": "command: 2503, payload: 00"
+	}
+	tiles {
+		standardTile("toggle", "device.door", width: 2, height: 2) {
+			state("unknown", label:'${name}', action:"refresh.refresh", icon:"st.doors.garage.garage-open", backgroundColor:"#ffffff")
+			state("closed", label:'${name}', action:"door control.open", icon:"st.doors.garage.garage-closed", backgroundColor:"#00a0dc", nextState:"opening")
+			state("open", label:'${name}', action:"door control.close", icon:"st.doors.garage.garage-open", backgroundColor:"#e86d13", nextState:"closing")
+			state("opening", label:'${name}', icon:"st.doors.garage.garage-opening", backgroundColor:"#e86d13")
+			state("closing", label:'${name}', icon:"st.doors.garage.garage-closing", backgroundColor:"#00a0dc")
+
+		}
+		standardTile("open", "device.door", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'open', action:"door control.open", icon:"st.doors.garage.garage-opening"
+		}
+		standardTile("close", "device.door", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'close', action:"door control.close", icon:"st.doors.garage.garage-closing"
+		}
+		standardTile("refresh", "device.door", inactiveLabel: false, decoration: "flat") {
+			state "default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh"
+		}
+
+		main "toggle"
+		details(["toggle", "open", "close", "refresh"])
+	}
+}
+def parse(String description) {
+	def result = null
+    log.debug "description: ${description}"
+	def cmd = zwave.parse(description, [0x20: 1, 0x25: 1])
+    // Process the parsed command
+    log.debug "command: ${cmd}"
+    if (cmd) {
+		result = zwaveEvent(cmd)
+        log.debug "parsed ${cmd} to ${result.inspect()}"
+	}   
+	log.debug "Parse returned ${result?.descriptionText}"
+    
+	return result
+}
+
+// Create events
+def zwaveEvent(physicalgraph.zwave.commands.switchbinaryv1.SwitchBinaryReport cmd) {
+    log.debug "switch binary report: ${cmd}"
+	def result = []
+    result << createEvent(name: "switch", value: cmd.value ? "on" : "off")
+    result << createEvent(name: "contact", value: cmd.value ? "open" : "closed")
+    result << createEvent(name: "door", value: cmd.value ? "open" : "closed")
+    def state = cmd.value ? "OPEN" : "CLOSED"
+    result << createEvent(name: "contactState", value: state)
+    def timeString = new Date().format("h:mma MM-dd-yyyy", location.timeZone)
+    def statusTextmsg = "Last refreshed: ${timeString}"
+    result << createEvent("name":"statusText", "value":statusTextmsg, displayed: false)
+    result
+}
+
+def zwaveEvent(physicalgraph.zwave.Command cmd) {
+	// Handles all Z-Wave commands we aren't interested in
+    log.debug "cmd: ${cmd}"
+	[:]
+}
+
+// Implement commands
+def on() {
+	// If the device is off then turn on
+	if (device.currentValue("switch") == "off") {
+        log.debug "opening the door"
+        delayBetween([
+            zwave.basicV1.basicSet(value: 0xFF).format(),
+            zwave.switchBinaryV1.switchBinaryGet().format()
+        ])
+   	} else {
+    	log.debug "Not opening door since it is already open"
+    }
+}
+
+def off() {
+	// If the device is off then turn on
+	if (device.currentValue("switch") == "on") {
+        log.debug "closing the door"
+        delayBetween([
+            zwave.basicV1.basicSet(value: 0x00).format(),
+            zwave.switchBinaryV1.switchBinaryGet().format()
+        ])
+   	} else {
+    	log.debug "Not closing door since it is already closed"
+    }
+}
+
+def open() {
+	log.debug "attempting to open the door"
+	// If the device is not in a open or opening state
+	if (device.currentValue("contact") != "open") {
+		log.debug "Door is currently " + device.currentValue("contact") + " - opening the door"
+		on()
+	} else {
+		log.debug "Not opening door since it is already open"
+	}
+}
+
+def close() {
+	log.debug "attempting to close the door"
+	if (device.currentValue("contact") != "closed") {
+		log.debug "Door is currently " + device.currentValue("contact") + " - closing the door"
+		off()
+	} else {
+		log.debug "Not closing door since it is already closed"
+	}
+}
+
+def poll() {
+	log.debug "polling device"
+	delayBetween([
+		zwave.switchBinaryV1.switchBinaryGet().format()
+	])
+}
+
+def refresh() {
+	log.debug "refreshing device"
+	delayBetween([
+		zwave.switchBinaryV1.switchBinaryGet().format()
+	])
+}
